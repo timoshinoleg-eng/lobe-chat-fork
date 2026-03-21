@@ -62,7 +62,7 @@ export default defineConfig({
     },
 
     // Отключаем PWA для Docker сборки
-    process.env.DOCKER !== 'true' && VitePWA({
+    // VitePWA disabled: false && VitePWA({
       injectRegister: null,
       manifest: false,
       registerType: 'prompt',
