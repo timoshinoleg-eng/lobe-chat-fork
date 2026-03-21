@@ -13,12 +13,29 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Railway CLI
-        run: npm install -g @railway/cli
+        run: |
+          npm install -g @railway/cli
+          railway --version
+
+      - name: Debug Environment
+        run: |
+          echo "RAILWAY_TOKEN is set: ${{ secrets.RAILWAY_TOKEN != '' }}"
+          echo "Project ID: 3976f97a-f083-46f3-afdc-351ba0f03eda"
+          echo "Service ID: d513f82f-3c3b-4ecc-b57e-237a58b38d2b"
 
       - name: Deploy to Railway
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
+          set -x
+          echo "Logging in to Railway..."
           railway login --token "$RAILWAY_TOKEN"
-          railway link --project 3976f97a-f083-46f3-afdc-351ba0f03eda --service d513f82f-3c3b-4ecc-b57e-237a58b38d2b --environment 41466349-8ead-4a4a-b2f7-548f2c4cdb6f
+          echo "Login successful"
+          
+          echo "Linking to project..."
+          railway link --project 3976f97a-f083-46f3-afdc-351ba0f03eda --service d513f82f-3c3b-4ecc-b57e-237a58b38d2b
+          echo "Link successful"
+          
+          echo "Starting deployment..."
           railway up
+          echo "Deployment complete"
