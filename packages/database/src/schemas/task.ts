@@ -140,3 +140,32 @@ export const taskDocuments = pgTable(
 
 export type NewTaskDocument = typeof taskDocuments.$inferInsert;
 export type TaskDocumentItem = typeof taskDocuments.$inferSelect;
+
+// ── Task Topics ─────────────────────────────────────────
+
+export const taskTopics = pgTable(
+  'task_topics',
+  {
+    id: uuid('id').defaultRandom().primaryKey().notNull(),
+    taskId: text('task_id')
+      .references(() => tasks.id, { onDelete: 'cascade' })
+      .notNull(),
+    topicId: text('topic_id').notNull(),
+
+    seq: integer('seq').notNull(), // topic sequence within task (1, 2, 3...)
+    operationId: text('operation_id'), // agent execution operation ID
+    // 'running' | 'completed' | 'failed'
+    status: text('status').notNull().default('running'),
+
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('task_topics_unique_idx').on(t.taskId, t.topicId),
+    index('task_topics_task_id_idx').on(t.taskId),
+    index('task_topics_topic_id_idx').on(t.topicId),
+    index('task_topics_status_idx').on(t.taskId, t.status),
+  ],
+);
+
+export type NewTaskTopic = typeof taskTopics.$inferInsert;
+export type TaskTopicItem = typeof taskTopics.$inferSelect;

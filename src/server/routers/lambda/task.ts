@@ -8,7 +8,15 @@ import { serverDatabase } from '@/libs/trpc/lambda/middleware';
 import { AiAgentService } from '@/server/services/aiAgent';
 import { TaskReviewService } from '@/server/services/taskReview';
 
-const taskProcedure = authedProcedure.use(serverDatabase);
+const taskProcedure = authedProcedure.use(serverDatabase).use(async (opts) => {
+  const { ctx } = opts;
+  return opts.next({
+    ctx: {
+      briefModel: new BriefModel(ctx.serverDB, ctx.userId),
+      taskModel: new TaskModel(ctx.serverDB, ctx.userId),
+    },
+  });
+});
 
 // All procedures that take an id accept either raw id (task_xxx) or identifier (TASK-1)
 // Resolution happens in the model layer via model.resolve()
@@ -59,27 +67,13 @@ async function buildTaskPrompt(
     ? `## Task: ${task.name || task.identifier}\n\n${task.description}\n\n## Instruction\n\n${task.instruction}`
     : task.instruction;
 
-  // Inject handoff from previous topics (query by metadata.taskId)
+  // Inject handoff from previous topics via task_topics association
   if (task.totalTopics && task.totalTopics > 0) {
     try {
-      const { sql: rawSql } = await import('drizzle-orm');
-      const { topics } = await import('@/database/schemas');
-      const { and, eq, desc } = await import('drizzle-orm');
+      const model = new TaskModel(db, userId);
+      const topicLinks = await model.getTopicsWithHandoff(task.id);
 
-      const prevTopics = await db
-        .select({ metadata: topics.metadata, title: topics.title })
-        .from(topics)
-        .where(
-          and(
-            eq(topics.userId, userId),
-            eq(topics.trigger, 'task'),
-            rawSql`${topics.metadata}->>'taskId' = ${task.id}`,
-          ),
-        )
-        .orderBy(desc(topics.createdAt))
-        .limit(4);
-
-      const handoffs = prevTopics
+      const handoffs = topicLinks
         .filter((t: any) => t.metadata?.handoff)
         .map((t: any, i: number) =>
           i === 0
@@ -120,7 +114,7 @@ export const taskRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       try {
-        const model = new TaskModel(ctx.serverDB, ctx.userId);
+        const model = ctx.taskModel;
         const task = await resolveOrThrow(model, input.taskId);
         const dep = await resolveOrThrow(model, input.dependsOnId);
         await model.addDependency(task.id, dep.id, input.type);
@@ -138,7 +132,7 @@ export const taskRouter = router({
 
   create: taskProcedure.input(createSchema).mutation(async ({ input, ctx }) => {
     try {
-      const model = new TaskModel(ctx.serverDB, ctx.userId);
+      const model = ctx.taskModel;
 
       // Resolve parentTaskId if it's an identifier
       const createData = { ...input };
@@ -160,9 +154,24 @@ export const taskRouter = router({
     }
   }),
 
+  clearAll: taskProcedure.mutation(async ({ ctx }) => {
+    try {
+      const model = ctx.taskModel;
+      const count = await model.deleteAll();
+      return { count, message: `${count} tasks deleted`, success: true };
+    } catch (error) {
+      console.error('[task:clearAll]', error);
+      throw new TRPCError({
+        cause: error,
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to clear tasks',
+      });
+    }
+  }),
+
   delete: taskProcedure.input(idInput).mutation(async ({ input, ctx }) => {
     try {
-      const model = new TaskModel(ctx.serverDB, ctx.userId);
+      const model = ctx.taskModel;
       const task = await resolveOrThrow(model, input.id);
       await model.delete(task.id);
       return { message: 'Task deleted', success: true };
@@ -177,9 +186,46 @@ export const taskRouter = router({
     }
   }),
 
+  detail: taskProcedure.input(idInput).query(async ({ input, ctx }) => {
+    try {
+      const model = ctx.taskModel;
+      const task = await resolveOrThrow(model, input.id);
+
+      // Parallel fetch all related data
+      const briefModel = ctx.briefModel;
+      const [subtasks, dependencies, topics, briefs] = await Promise.all([
+        model.findSubtasks(task.id),
+        model.getDependencies(task.id),
+        model.getTopicsWithDetails(task.id),
+        briefModel.findByTaskId(task.id),
+      ]);
+
+      return {
+        data: {
+          ...task,
+          briefs,
+          checkpoint: model.getCheckpointConfig(task),
+          dependencies,
+          review: model.getReviewConfig(task),
+          subtasks,
+          topics,
+        },
+        success: true,
+      };
+    } catch (error) {
+      if (error instanceof TRPCError) throw error;
+      console.error('[task:detail]', error);
+      throw new TRPCError({
+        cause: error,
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to get task detail',
+      });
+    }
+  }),
+
   find: taskProcedure.input(idInput).query(async ({ input, ctx }) => {
     try {
-      const model = new TaskModel(ctx.serverDB, ctx.userId);
+      const model = ctx.taskModel;
       const task = await resolveOrThrow(model, input.id);
       return { data: task, success: true };
     } catch (error) {
@@ -195,7 +241,7 @@ export const taskRouter = router({
 
   getDependencies: taskProcedure.input(idInput).query(async ({ input, ctx }) => {
     try {
-      const model = new TaskModel(ctx.serverDB, ctx.userId);
+      const model = ctx.taskModel;
       const task = await resolveOrThrow(model, input.id);
       const deps = await model.getDependencies(task.id);
       return { data: deps, success: true };
@@ -212,7 +258,7 @@ export const taskRouter = router({
 
   getPinnedDocuments: taskProcedure.input(idInput).query(async ({ input, ctx }) => {
     try {
-      const model = new TaskModel(ctx.serverDB, ctx.userId);
+      const model = ctx.taskModel;
       const task = await resolveOrThrow(model, input.id);
       const docs = await model.getPinnedDocuments(task.id);
       return { data: docs, success: true };
@@ -227,9 +273,26 @@ export const taskRouter = router({
     }
   }),
 
+  getTopics: taskProcedure.input(idInput).query(async ({ input, ctx }) => {
+    try {
+      const model = ctx.taskModel;
+      const task = await resolveOrThrow(model, input.id);
+      const results = await model.getTopicsWithDetails(task.id);
+      return { data: results, success: true };
+    } catch (error) {
+      if (error instanceof TRPCError) throw error;
+      console.error('[task:getTopics]', error);
+      throw new TRPCError({
+        cause: error,
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Failed to get task topics',
+      });
+    }
+  }),
+
   getSubtasks: taskProcedure.input(idInput).query(async ({ input, ctx }) => {
     try {
-      const model = new TaskModel(ctx.serverDB, ctx.userId);
+      const model = ctx.taskModel;
       const task = await resolveOrThrow(model, input.id);
       const subtasks = await model.findSubtasks(task.id);
       return { data: subtasks, success: true };
@@ -246,7 +309,7 @@ export const taskRouter = router({
 
   getTaskTree: taskProcedure.input(idInput).query(async ({ input, ctx }) => {
     try {
-      const model = new TaskModel(ctx.serverDB, ctx.userId);
+      const model = ctx.taskModel;
       const task = await resolveOrThrow(model, input.id);
       const tree = await model.getTaskTree(task.id);
       return { data: tree, success: true };
@@ -263,7 +326,7 @@ export const taskRouter = router({
 
   heartbeat: taskProcedure.input(idInput).mutation(async ({ input, ctx }) => {
     try {
-      const model = new TaskModel(ctx.serverDB, ctx.userId);
+      const model = ctx.taskModel;
       const task = await resolveOrThrow(model, input.id);
       await model.updateHeartbeat(task.id);
       return { message: 'Heartbeat updated', success: true };
@@ -325,7 +388,7 @@ export const taskRouter = router({
 
   list: taskProcedure.input(listSchema).query(async ({ input, ctx }) => {
     try {
-      const model = new TaskModel(ctx.serverDB, ctx.userId);
+      const model = ctx.taskModel;
       const result = await model.list(input);
       return { data: result.tasks, success: true, total: result.total };
     } catch (error) {
@@ -349,7 +412,7 @@ export const taskRouter = router({
     .mutation(async ({ input, ctx }) => {
       const { id, prompt: extraPrompt } = input;
       try {
-        const model = new TaskModel(ctx.serverDB, ctx.userId);
+        const model = ctx.taskModel;
         const task = await resolveOrThrow(model, id);
 
         // Ensure task has an assigned agent
@@ -388,24 +451,35 @@ export const taskRouter = router({
                 await taskModel.updateHeartbeat(taskId);
 
                 const briefModel = new BriefModel(db, userId);
+                const topicId = event.topicId;
+
+                // Get topic seq for display
+                const currentTask = await taskModel.findById(taskId);
+                const topicSeq = currentTask?.totalTopics || '?';
+                const topicRef = topicId ? ` #${topicSeq} (${topicId})` : '';
+
                 if (event.reason === 'done') {
-                  await briefModel.create({
-                    priority: 'info',
-                    summary: event.lastAssistantContent
-                      ? event.lastAssistantContent.slice(0, 200)
-                      : 'Topic completed successfully.',
-                    taskId,
-                    title: `${taskIdentifier} topic completed`,
-                    type: 'result',
-                  });
+                  // Update topic status
+                  if (topicId) await taskModel.updateTopicStatus(taskId, topicId, 'completed');
+
+                  // Check checkpoint config — pause task for user review
+                  if (currentTask && taskModel.shouldPauseOnTopicComplete(currentTask)) {
+                    await taskModel.updateStatus(taskId, 'paused');
+                  }
                 } else if (event.reason === 'error') {
+                  // Update topic status
+                  if (topicId) await taskModel.updateTopicStatus(taskId, topicId, 'failed');
+
                   await briefModel.create({
                     priority: 'urgent',
                     summary: `Execution failed: ${event.errorMessage || 'Unknown error'}`,
                     taskId,
-                    title: `${taskIdentifier} execution error`,
+                    title: `${taskIdentifier} topic${topicRef} error`,
                     type: 'error',
                   });
+
+                  // On error, pause task for user intervention
+                  await taskModel.updateStatus(taskId, 'paused');
                 }
               },
               id: 'task-on-complete',
@@ -423,10 +497,14 @@ export const taskRouter = router({
           userInterventionConfig: { approvalMode: 'headless' },
         });
 
-        // Update task topic count and current topic
+        // Update task topic count, current topic, and association
         if (result.topicId) {
           await model.incrementTopicCount(task.id);
           await model.updateCurrentTopic(task.id, result.topicId);
+          await model.addTopic(task.id, result.topicId, {
+            operationId: result.operationId,
+            seq: (task.totalTopics || 0) + 1,
+          });
         }
 
         // Update heartbeat
@@ -458,7 +536,7 @@ export const taskRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       try {
-        const model = new TaskModel(ctx.serverDB, ctx.userId);
+        const model = ctx.taskModel;
         const task = await resolveOrThrow(model, input.taskId);
         await model.pinDocument(task.id, input.documentId, input.pinnedBy);
         return { message: 'Document pinned', success: true };
@@ -477,7 +555,7 @@ export const taskRouter = router({
     .input(z.object({ dependsOnId: z.string(), taskId: z.string() }))
     .mutation(async ({ input, ctx }) => {
       try {
-        const model = new TaskModel(ctx.serverDB, ctx.userId);
+        const model = ctx.taskModel;
         const task = await resolveOrThrow(model, input.taskId);
         const dep = await resolveOrThrow(model, input.dependsOnId);
         await model.removeDependency(task.id, dep.id);
@@ -497,7 +575,7 @@ export const taskRouter = router({
     .input(z.object({ documentId: z.string(), taskId: z.string() }))
     .mutation(async ({ input, ctx }) => {
       try {
-        const model = new TaskModel(ctx.serverDB, ctx.userId);
+        const model = ctx.taskModel;
         const task = await resolveOrThrow(model, input.taskId);
         await model.unpinDocument(task.id, input.documentId);
         return { message: 'Document unpinned', success: true };
@@ -514,7 +592,7 @@ export const taskRouter = router({
 
   getCheckpoint: taskProcedure.input(idInput).query(async ({ input, ctx }) => {
     try {
-      const model = new TaskModel(ctx.serverDB, ctx.userId);
+      const model = ctx.taskModel;
       const task = await resolveOrThrow(model, input.id);
       const checkpoint = model.getCheckpointConfig(task);
       return { data: checkpoint, success: true };
@@ -554,7 +632,7 @@ export const taskRouter = router({
     .mutation(async ({ input, ctx }) => {
       const { id, checkpoint } = input;
       try {
-        const model = new TaskModel(ctx.serverDB, ctx.userId);
+        const model = ctx.taskModel;
         const resolved = await resolveOrThrow(model, id);
         const task = await model.updateCheckpointConfig(resolved.id, checkpoint);
         if (!task) throw new TRPCError({ code: 'NOT_FOUND', message: 'Task not found' });
@@ -576,7 +654,7 @@ export const taskRouter = router({
 
   getReview: taskProcedure.input(idInput).query(async ({ input, ctx }) => {
     try {
-      const model = new TaskModel(ctx.serverDB, ctx.userId);
+      const model = ctx.taskModel;
       const task = await resolveOrThrow(model, input.id);
       return { data: model.getReviewConfig(task) || null, success: true };
     } catch (error) {
@@ -620,7 +698,7 @@ export const taskRouter = router({
     .mutation(async ({ input, ctx }) => {
       const { id, review } = input;
       try {
-        const model = new TaskModel(ctx.serverDB, ctx.userId);
+        const model = ctx.taskModel;
         const resolved = await resolveOrThrow(model, id);
         const task = await model.updateReviewConfig(resolved.id, review);
         if (!task) throw new TRPCError({ code: 'NOT_FOUND', message: 'Task not found' });
@@ -644,7 +722,7 @@ export const taskRouter = router({
     .input(idInput.merge(z.object({ content: z.string().optional() })))
     .mutation(async ({ input, ctx }) => {
       try {
-        const model = new TaskModel(ctx.serverDB, ctx.userId);
+        const model = ctx.taskModel;
         const task = await resolveOrThrow(model, input.id);
 
         const reviewConfig = model.getReviewConfig(task);
@@ -674,7 +752,7 @@ export const taskRouter = router({
         });
 
         // Create brief with review result
-        const briefModel = new BriefModel(ctx.serverDB, ctx.userId);
+        const briefModel = ctx.briefModel;
         const scoresSummary = result.scores
           .map((s: any) => `${s.criterion}: ${s.score}% ${s.passed ? '✓' : '✗'}`)
           .join(', ');
@@ -702,7 +780,7 @@ export const taskRouter = router({
   update: taskProcedure.input(idInput.merge(updateSchema)).mutation(async ({ input, ctx }) => {
     const { id, ...data } = input;
     try {
-      const model = new TaskModel(ctx.serverDB, ctx.userId);
+      const model = ctx.taskModel;
       const resolved = await resolveOrThrow(model, id);
       const task = await model.update(resolved.id, data);
       if (!task) throw new TRPCError({ code: 'NOT_FOUND', message: 'Task not found' });
@@ -729,7 +807,7 @@ export const taskRouter = router({
     .mutation(async ({ input, ctx }) => {
       const { id, status, error: errorMsg } = input;
       try {
-        const model = new TaskModel(ctx.serverDB, ctx.userId);
+        const model = ctx.taskModel;
         const resolved = await resolveOrThrow(model, id);
 
         const extra: Record<string, unknown> = {};

@@ -505,6 +505,51 @@ describe('TaskModel', () => {
       expect(model.shouldPauseBeforeStart(parentUpdated, 'TASK-6')).toBe(false);
     });
 
+    it('should pause on topic complete by default (no config)', async () => {
+      const model = new TaskModel(serverDB, userId);
+      const task = await model.create({ instruction: 'Test' });
+
+      // No checkpoint configured → should pause (default behavior)
+      expect(model.shouldPauseOnTopicComplete(task)).toBe(true);
+    });
+
+    it('should pause on topic complete when topic.after is true', async () => {
+      const model = new TaskModel(serverDB, userId);
+      const task = await model.create({ instruction: 'Test' });
+
+      await model.updateCheckpointConfig(task.id, {
+        topic: { after: true },
+      });
+
+      const updated = (await model.findById(task.id))!;
+      expect(model.shouldPauseOnTopicComplete(updated)).toBe(true);
+    });
+
+    it('should not pause on topic complete when only onAgentRequest is set', async () => {
+      const model = new TaskModel(serverDB, userId);
+      const task = await model.create({ instruction: 'Test' });
+
+      await model.updateCheckpointConfig(task.id, {
+        onAgentRequest: true,
+      });
+
+      const updated = (await model.findById(task.id))!;
+      // Has explicit config but topic.after is not true → don't auto-pause
+      expect(model.shouldPauseOnTopicComplete(updated)).toBe(false);
+    });
+
+    it('should not pause on topic complete when topic.after is false', async () => {
+      const model = new TaskModel(serverDB, userId);
+      const task = await model.create({ instruction: 'Test' });
+
+      await model.updateCheckpointConfig(task.id, {
+        topic: { after: false },
+      });
+
+      const updated = (await model.findById(task.id))!;
+      expect(model.shouldPauseOnTopicComplete(updated)).toBe(false);
+    });
+
     it('should check shouldPauseAfterComplete', async () => {
       const model = new TaskModel(serverDB, userId);
       const parent = await model.create({ instruction: 'Parent' });

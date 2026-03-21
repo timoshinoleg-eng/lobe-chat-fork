@@ -1,8 +1,8 @@
 import type { CheckpointConfig } from '@lobechat/types';
 import { and, desc, eq, inArray, isNotNull, isNull, ne, sql } from 'drizzle-orm';
 
-import type { NewTask, TaskItem } from '../schemas/task';
-import { taskDependencies, taskDocuments, tasks } from '../schemas/task';
+import type { NewTask, TaskItem, TaskTopicItem } from '../schemas/task';
+import { taskDependencies, taskDocuments, tasks, taskTopics } from '../schemas/task';
 import type { LobeChatDatabase } from '../type';
 
 export class TaskModel {
@@ -91,6 +91,15 @@ export class TaskModel {
       .returning();
 
     return result.length > 0;
+  }
+
+  async deleteAll(): Promise<number> {
+    const result = await this.db
+      .delete(tasks)
+      .where(eq(tasks.createdByUserId, this.userId))
+      .returning();
+
+    return result.length;
   }
 
   // ========== Query ==========
@@ -202,6 +211,15 @@ export class TaskModel {
 
     const config = { ...(task.config as Record<string, any>), review };
     return this.update(id, { config });
+  }
+
+  // Check if a task should pause after a topic completes
+  // Default: pause (when no checkpoint config is set)
+  // Explicit: pause only if topic.after is true
+  shouldPauseOnTopicComplete(task: TaskItem): boolean {
+    const checkpoint = this.getCheckpointConfig(task);
+    const hasAnyConfig = Object.keys(checkpoint).length > 0;
+    return hasAnyConfig ? !!checkpoint.topic?.after : true;
   }
 
   // Check if a task should be paused before starting (parent's tasks.beforeIds)
@@ -380,5 +398,61 @@ export class TaskModel {
       .update(tasks)
       .set({ currentTopicId: topicId, updatedAt: new Date() })
       .where(eq(tasks.id, id));
+  }
+
+  async getTopicsWithDetails(taskId: string) {
+    const { topics } = await import('../schemas/topic');
+    return this.db
+      .select({
+        createdAt: topics.createdAt,
+        id: topics.id,
+        metadata: topics.metadata,
+        operationId: taskTopics.operationId,
+        seq: taskTopics.seq,
+        status: taskTopics.status,
+        title: topics.title,
+        updatedAt: topics.updatedAt,
+      })
+      .from(taskTopics)
+      .innerJoin(topics, eq(taskTopics.topicId, topics.id))
+      .where(eq(taskTopics.taskId, taskId))
+      .orderBy(desc(taskTopics.seq));
+  }
+
+  async getTopicsWithHandoff(taskId: string, limit = 4) {
+    const { topics } = await import('../schemas/topic');
+    return this.db
+      .select({ metadata: topics.metadata, title: topics.title })
+      .from(taskTopics)
+      .innerJoin(topics, eq(taskTopics.topicId, topics.id))
+      .where(eq(taskTopics.taskId, taskId))
+      .orderBy(desc(taskTopics.seq))
+      .limit(limit);
+  }
+
+  async addTopic(
+    taskId: string,
+    topicId: string,
+    params: { operationId?: string; seq: number },
+  ): Promise<void> {
+    await this.db
+      .insert(taskTopics)
+      .values({ operationId: params.operationId, seq: params.seq, taskId, topicId })
+      .onConflictDoNothing();
+  }
+
+  async updateTopicStatus(taskId: string, topicId: string, status: string): Promise<void> {
+    await this.db
+      .update(taskTopics)
+      .set({ status })
+      .where(and(eq(taskTopics.taskId, taskId), eq(taskTopics.topicId, topicId)));
+  }
+
+  async getTopics(taskId: string): Promise<TaskTopicItem[]> {
+    return this.db
+      .select()
+      .from(taskTopics)
+      .where(eq(taskTopics.taskId, taskId))
+      .orderBy(desc(taskTopics.seq));
   }
 }

@@ -24,6 +24,7 @@ export function registerTaskCommand(program: Command) {
     .option('--agent <id>', 'Filter by assignee agent ID')
     .option('-L, --limit <n>', 'Page size', '50')
     .option('--offset <n>', 'Offset', '0')
+    .option('--tree', 'Display as tree structure')
     .option('--json [fields]', 'Output JSON')
     .action(
       async (options: {
@@ -34,6 +35,7 @@ export function registerTaskCommand(program: Command) {
         parent?: string;
         root?: boolean;
         status?: string;
+        tree?: boolean;
       }) => {
         const client = await getTrpcClient();
 
@@ -45,6 +47,12 @@ export function registerTaskCommand(program: Command) {
         if (options.limit) input.limit = Number.parseInt(options.limit, 10);
         if (options.offset) input.offset = Number.parseInt(options.offset, 10);
 
+        // For tree mode, fetch all tasks (no pagination limit)
+        if (options.tree) {
+          input.limit = 100;
+          delete input.offset;
+        }
+
         const result = await client.task.list.query(input as any);
 
         if (options.json !== undefined) {
@@ -54,6 +62,41 @@ export function registerTaskCommand(program: Command) {
 
         if (!result.data || result.data.length === 0) {
           log.info('No tasks found.');
+          return;
+        }
+
+        if (options.tree) {
+          // Build tree display
+          const taskMap = new Map<string, any>();
+          for (const t of result.data) taskMap.set(t.id, t);
+
+          const roots = result.data.filter((t: any) => !t.parentTaskId);
+          const children = new Map<string, any[]>();
+          for (const t of result.data) {
+            if (t.parentTaskId) {
+              const list = children.get(t.parentTaskId) || [];
+              list.push(t);
+              children.set(t.parentTaskId, list);
+            }
+          }
+
+          const printNode = (t: any, prefix: string, isLast: boolean, isRoot: boolean) => {
+            const connector = isRoot ? '' : isLast ? '└── ' : '├── ';
+            const name = truncate(t.name || t.instruction, 40);
+            console.log(
+              `${prefix}${connector}${pc.dim(t.identifier)} ${statusBadge(t.status)} ${name}`,
+            );
+            const childList = children.get(t.id) || [];
+            const newPrefix = isRoot ? '' : prefix + (isLast ? '    ' : '│   ');
+            childList.forEach((child: any, i: number) => {
+              printNode(child, newPrefix, i === childList.length - 1, false);
+            });
+          };
+
+          for (const root of roots) {
+            printNode(root, '', true, true);
+          }
+          log.info(`Total: ${result.total}`);
           return;
         }
 
@@ -77,11 +120,60 @@ export function registerTaskCommand(program: Command) {
   task
     .command('view <id>')
     .description('View task details (by ID or identifier like TASK-1)')
+    .option('--topic <topicId>', 'View messages of a specific topic')
     .option('--json [fields]', 'Output JSON')
-    .action(async (id: string, options: { json?: string | boolean }) => {
+    .action(async (id: string, options: { json?: string | boolean; topic?: string }) => {
       const client = await getTrpcClient();
 
-      const result = await client.task.find.query({ id });
+      // If --topic is specified, show topic messages
+      if (options.topic) {
+        let topicId = options.topic;
+
+        // If it's a number, treat as seq index (e.g. --topic=1)
+        const seqNum = Number.parseInt(topicId, 10);
+        if (!Number.isNaN(seqNum) && String(seqNum) === topicId) {
+          const topicsResult = await client.task.getTopics.query({ id });
+          const match = (topicsResult.data || []).find((t: any) => t.seq === seqNum);
+          if (!match) {
+            log.error(`Topic #${seqNum} not found for this task.`);
+            return;
+          }
+          topicId = match.id;
+          log.info(`Topic #${seqNum}: ${pc.bold(match.title || 'Untitled')} ${pc.dim(topicId)}`);
+        }
+
+        const messages = await client.message.getMessages.query({ topicId });
+        const items = Array.isArray(messages) ? messages : [];
+
+        if (options.json !== undefined) {
+          outputJson(items, options.json);
+          return;
+        }
+
+        if (items.length === 0) {
+          log.info('No messages in this topic.');
+          return;
+        }
+
+        console.log();
+        for (const msg of items) {
+          const role =
+            msg.role === 'assistant'
+              ? pc.green('Assistant')
+              : msg.role === 'user'
+                ? pc.blue('User')
+                : pc.dim(msg.role);
+
+          console.log(`${pc.bold(role)} ${pc.dim(timeAgo(msg.createdAt))}`);
+          if (msg.content) {
+            console.log(msg.content);
+          }
+          console.log();
+        }
+        return;
+      }
+
+      const result = await client.task.detail.query({ id });
 
       if (options.json !== undefined) {
         outputJson(result.data, options.json);
@@ -89,9 +181,11 @@ export function registerTaskCommand(program: Command) {
       }
 
       const t = result.data;
+
+      // ── Header ──
       console.log(`\n${pc.bold(t.identifier)} ${t.name || ''}`);
       console.log(
-        `${pc.dim('Status:')} ${statusBadge(t.status)}  ${pc.dim('Priority:')} ${t.priority || 'normal'}`,
+        `${pc.dim('Status:')} ${statusBadge(t.status)}  ${pc.dim('Priority:')} ${priorityLabel(t.priority)}`,
       );
       console.log(`${pc.dim('Instruction:')} ${t.instruction}`);
       if (t.description) console.log(`${pc.dim('Description:')} ${t.description}`);
@@ -103,25 +197,120 @@ export function registerTaskCommand(program: Command) {
       );
       if (t.error) console.log(`${pc.red('Error:')} ${t.error}`);
 
-      // Show subtasks
-      const subtasks = await client.task.getSubtasks.query({ id: t.id });
-      if (subtasks.data && subtasks.data.length > 0) {
+      // ── Checkpoint ──
+      {
+        const cp = t.checkpoint as any;
+        console.log(`\n${pc.bold('Checkpoint:')}`);
+        const hasConfig =
+          cp.onAgentRequest !== undefined ||
+          cp.topic?.before ||
+          cp.topic?.after ||
+          cp.tasks?.beforeIds?.length > 0 ||
+          cp.tasks?.afterIds?.length > 0;
+
+        if (hasConfig) {
+          if (cp.onAgentRequest !== undefined)
+            console.log(`  onAgentRequest: ${cp.onAgentRequest}`);
+          if (cp.topic?.before) console.log(`  topic.before: ${cp.topic.before}`);
+          if (cp.topic?.after) console.log(`  topic.after: ${cp.topic.after}`);
+          if (cp.tasks?.beforeIds?.length > 0)
+            console.log(`  tasks.before: ${cp.tasks.beforeIds.join(', ')}`);
+          if (cp.tasks?.afterIds?.length > 0)
+            console.log(`  tasks.after: ${cp.tasks.afterIds.join(', ')}`);
+        } else {
+          console.log(`  ${pc.dim('(not configured, default: onAgentRequest=true)')}`);
+        }
+      }
+
+      // ── Review ──
+      {
+        const rv = t.review as any;
+        console.log(`\n${pc.bold('Review:')}`);
+        if (rv && rv.enabled) {
+          console.log(
+            `  judge: ${rv.judge?.model || 'default'}${rv.judge?.provider ? ` (${rv.judge.provider})` : ''}`,
+          );
+          console.log(`  maxIterations: ${rv.maxIterations}  autoRetry: ${rv.autoRetry}`);
+          if (rv.criteria?.length > 0) {
+            for (const c of rv.criteria) {
+              console.log(
+                `  - ${c.name}: ≥ ${c.threshold}%${c.weight ? ` (weight: ${c.weight})` : ''}`,
+              );
+            }
+          }
+        } else {
+          console.log(`  ${pc.dim('(not configured)')}`);
+        }
+      }
+
+      // ── Subtasks ──
+      if (t.subtasks && t.subtasks.length > 0) {
         console.log(`\n${pc.bold('Subtasks:')}`);
-        for (const s of subtasks.data) {
+        for (const s of t.subtasks) {
           console.log(
             `  ${pc.dim(s.identifier)} ${statusBadge(s.status)} ${s.name || s.instruction}`,
           );
         }
       }
 
-      // Show dependencies
-      const deps = await client.task.getDependencies.query({ id: t.id });
-      if (deps.data && deps.data.length > 0) {
+      // ── Dependencies ──
+      if (t.dependencies && t.dependencies.length > 0) {
         console.log(`\n${pc.bold('Dependencies:')}`);
-        for (const d of deps.data) {
+        for (const d of t.dependencies as any[]) {
           console.log(`  ${pc.dim(d.type)}: ${d.dependsOnId}`);
         }
       }
+
+      // ── Activities ──
+      {
+        const activities: { data: any; time: number; type: 'topic' | 'brief' }[] = [];
+
+        for (const tp of t.topics || []) {
+          activities.push({
+            data: tp,
+            time: new Date(tp.createdAt).getTime(),
+            type: 'topic',
+          });
+        }
+
+        for (const b of t.briefs || []) {
+          activities.push({
+            data: b,
+            time: new Date(b.createdAt).getTime(),
+            type: 'brief',
+          });
+        }
+
+        if (activities.length > 0) {
+          activities.sort((a, b) => a.time - b.time);
+
+          console.log(`\n${pc.bold('Activities:')}`);
+          for (const act of activities) {
+            if (act.type === 'topic') {
+              const tp = act.data;
+              const sBadge = statusBadge(tp.status || 'running');
+              console.log(
+                `  💬 ${pc.dim(timeAgo(tp.createdAt))} Topic #${tp.seq} ${pc.dim(tp.id)} ${sBadge} ${tp.title || 'Untitled'}`,
+              );
+            } else {
+              const b = act.data;
+              const icon = briefIcon(b.type);
+              const pri =
+                b.priority === 'urgent'
+                  ? pc.red(' [urgent]')
+                  : b.priority === 'normal'
+                    ? pc.yellow(' [normal]')
+                    : '';
+              const resolved = b.resolvedAt ? pc.green(' ✓') : b.readAt ? pc.dim(' (read)') : '';
+              console.log(`  ${icon} ${pc.dim(timeAgo(b.createdAt))} ${b.title}${pri}${resolved}`);
+              if (b.summary) console.log(`    ${pc.dim(truncate(b.summary, 80))}`);
+              if (b.artifacts?.length > 0)
+                console.log(`    ${pc.dim(`📎 ${b.artifacts.length} artifact(s)`)}`);
+            }
+          }
+        }
+      }
+
       console.log();
     });
 
@@ -239,16 +428,95 @@ export function registerTaskCommand(program: Command) {
       log.info(`Task ${pc.bold(id)} deleted.`);
     });
 
+  // ── clear ──────────────────────────────────────────────
+
+  task
+    .command('clear')
+    .description('Delete all tasks')
+    .option('-y, --yes', 'Skip confirmation')
+    .action(async (options: { yes?: boolean }) => {
+      if (!options.yes) {
+        const ok = await confirm(`Delete ${pc.red('ALL')} tasks? This cannot be undone.`);
+        if (!ok) return;
+      }
+
+      const client = await getTrpcClient();
+      const result = (await client.task.clearAll.mutate()) as any;
+      log.info(`${result.count} task(s) deleted.`);
+    });
+
   // ── start ──────────────────────────────────────────────
 
   task
     .command('start <id>')
     .description('Start a task (pending → running)')
-    .action(async (id: string) => {
-      const client = await getTrpcClient();
-      const result = await client.task.updateStatus.mutate({ id, status: 'running' });
-      log.info(`Task ${pc.bold(result.data.identifier)} started.`);
-    });
+    .option('--no-run', 'Only update status, do not trigger agent execution')
+    .option('-p, --prompt <text>', 'Additional context for the agent')
+    .option('-f, --follow', 'Follow agent output in real-time (default: run in background)')
+    .option('--json', 'Output full JSON event stream')
+    .option('-v, --verbose', 'Show detailed tool call info')
+    .action(
+      async (
+        id: string,
+        options: {
+          follow?: boolean;
+          json?: boolean;
+          prompt?: string;
+          run?: boolean;
+          verbose?: boolean;
+        },
+      ) => {
+        const client = await getTrpcClient();
+        const statusResult = await client.task.updateStatus.mutate({ id, status: 'running' });
+        log.info(`Task ${pc.bold(statusResult.data.identifier)} started.`);
+
+        // Auto-run unless --no-run
+        if (options.run === false) return;
+
+        // Default agent to inbox if not assigned
+        const taskDetail = await client.task.find.query({ id });
+        if (!taskDetail.data.assigneeAgentId) {
+          await client.task.update.mutate({ assigneeAgentId: 'inbox', id });
+          log.info(`Assigned default agent: ${pc.dim('inbox')}`);
+        }
+
+        const result = (await client.task.run.mutate({
+          id,
+          ...(options.prompt && { prompt: options.prompt }),
+        })) as any;
+
+        if (!result.success) {
+          log.error(`Failed to run task: ${result.error || result.message || 'Unknown error'}`);
+          process.exit(1);
+        }
+
+        log.info(
+          `Operation: ${pc.dim(result.operationId)} · Topic: ${pc.dim(result.topicId || 'n/a')}`,
+        );
+
+        if (!options.follow) {
+          log.info(
+            `Agent running in background. Use ${pc.dim(`lh task view ${id}`)} to check status.`,
+          );
+          return;
+        }
+
+        const { serverUrl, headers } = await getAuthInfo();
+        const streamUrl = `${serverUrl}/api/agent/stream?operationId=${encodeURIComponent(result.operationId)}`;
+
+        await streamAgentEvents(streamUrl, headers, {
+          json: options.json,
+          verbose: options.verbose,
+        });
+
+        // Send heartbeat after completion
+        try {
+          await client.task.heartbeat.mutate({ id });
+        } catch {
+          // ignore heartbeat errors
+        }
+      },
+    );
 
   // ── run ──────────────────────────────────────────────
 
@@ -256,7 +524,8 @@ export function registerTaskCommand(program: Command) {
     .command('run <id>')
     .description('Run a task — trigger agent execution')
     .option('-p, --prompt <text>', 'Additional context for the agent')
-    .option('--topics <n>', 'Run N topics in sequence (default: 1)', '1')
+    .option('-f, --follow', 'Follow agent output in real-time (default: run in background)')
+    .option('--topics <n>', 'Run N topics in sequence (default: 1, implies --follow)', '1')
     .option('--delay <s>', 'Delay between topics in seconds', '0')
     .option('--json', 'Output full JSON event stream')
     .option('-v, --verbose', 'Show detailed tool call info')
@@ -265,6 +534,7 @@ export function registerTaskCommand(program: Command) {
         id: string,
         options: {
           delay?: string;
+          follow?: boolean;
           json?: boolean;
           prompt?: string;
           topics?: string;
@@ -273,6 +543,9 @@ export function registerTaskCommand(program: Command) {
       ) => {
         const topicCount = Number.parseInt(options.topics || '1', 10);
         const delaySec = Number.parseInt(options.delay || '0', 10);
+
+        // --topics > 1 implies --follow
+        const shouldFollow = options.follow || topicCount > 1;
 
         for (let i = 0; i < topicCount; i++) {
           if (i > 0) {
@@ -302,6 +575,13 @@ export function registerTaskCommand(program: Command) {
             log.info(`Task ${pc.bold(result.taskIdentifier)} running`);
           }
           log.info(`Operation: ${pc.dim(operationId)} · Topic: ${pc.dim(result.topicId || 'n/a')}`);
+
+          if (!shouldFollow) {
+            log.info(
+              `Agent running in background. Use ${pc.dim(`lh task view ${id}`)} to check status.`,
+            );
+            return;
+          }
 
           // Connect to SSE stream and wait for completion
           const { serverUrl, headers } = await getAuthInfo();
@@ -723,6 +1003,26 @@ function statusBadge(status: string): string {
     }
     default: {
       return status;
+    }
+  }
+}
+
+function briefIcon(type: string): string {
+  switch (type) {
+    case 'decision': {
+      return '📋';
+    }
+    case 'result': {
+      return '✅';
+    }
+    case 'insight': {
+      return '💡';
+    }
+    case 'error': {
+      return '❌';
+    }
+    default: {
+      return '📌';
     }
   }
 }

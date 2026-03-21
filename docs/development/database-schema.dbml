@@ -267,35 +267,6 @@ table agent_eval_test_cases {
   }
 }
 
-table briefs {
-  id uuid [pk, not null, default: `gen_random_uuid()`]
-  user_id text [not null]
-  task_id text
-  cron_job_id text
-  topic_id text
-  agent_id text
-  type text [not null]
-  priority text [default: 'info']
-  title text [not null]
-  summary text [not null]
-  artifacts jsonb
-  actions jsonb
-  comment_type text
-  read_at "timestamp with time zone"
-  resolved_at "timestamp with time zone"
-  created_at "timestamp with time zone" [not null, default: `now()`]
-
-  indexes {
-    user_id [name: 'briefs_user_id_idx']
-    task_id [name: 'briefs_task_id_idx']
-    cron_job_id [name: 'briefs_cron_job_id_idx']
-    agent_id [name: 'briefs_agent_id_idx']
-    type [name: 'briefs_type_idx']
-    priority [name: 'briefs_priority_idx']
-    (user_id, resolved_at) [name: 'briefs_unresolved_idx']
-  }
-}
-
 table agent_skills {
   id text [pk, not null]
   name text [not null]
@@ -491,6 +462,35 @@ table verifications {
 
   indexes {
     identifier [name: 'verification_identifier_idx']
+  }
+}
+
+table briefs {
+  id uuid [pk, not null, default: `gen_random_uuid()`]
+  user_id text [not null]
+  task_id text
+  cron_job_id text
+  topic_id text
+  agent_id text
+  type text [not null]
+  priority text [default: 'info']
+  title text [not null]
+  summary text [not null]
+  artifacts jsonb
+  actions jsonb
+  comment_type text
+  read_at "timestamp with time zone"
+  resolved_at "timestamp with time zone"
+  created_at "timestamp with time zone" [not null, default: `now()`]
+
+  indexes {
+    user_id [name: 'briefs_user_id_idx']
+    task_id [name: 'briefs_task_id_idx']
+    cron_job_id [name: 'briefs_cron_job_id_idx']
+    agent_id [name: 'briefs_agent_id_idx']
+    type [name: 'briefs_type_idx']
+    priority [name: 'briefs_priority_idx']
+    (user_id, resolved_at) [name: 'briefs_unresolved_idx']
   }
 }
 
@@ -1395,6 +1395,23 @@ table task_documents {
     (task_id, document_id) [name: 'task_docs_unique_idx', unique]
     task_id [name: 'task_docs_task_id_idx']
     document_id [name: 'task_docs_document_id_idx']
+  }
+}
+
+table task_topics {
+  id uuid [pk, not null, default: `gen_random_uuid()`]
+  task_id text [not null]
+  topic_id text [not null]
+  seq integer [not null]
+  operation_id text
+  status text [not null, default: 'running']
+  created_at "timestamp with time zone" [not null, default: `now()`]
+
+  indexes {
+    (task_id, topic_id) [name: 'task_topics_unique_idx', unique]
+    task_id [name: 'task_topics_task_id_idx']
+    topic_id [name: 'task_topics_topic_id_idx']
+    (task_id, status) [name: 'task_topics_status_idx']
   }
 }
 
