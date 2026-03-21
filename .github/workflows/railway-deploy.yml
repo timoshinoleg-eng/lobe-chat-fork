@@ -12,30 +12,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Railway CLI
-        run: |
-          npm install -g @railway/cli
-          railway --version
-
-      - name: Debug Environment
-        run: |
-          echo "RAILWAY_TOKEN is set: ${{ secrets.RAILWAY_TOKEN != '' }}"
-          echo "Project ID: 3976f97a-f083-46f3-afdc-351ba0f03eda"
-          echo "Service ID: d513f82f-3c3b-4ecc-b57e-237a58b38d2b"
-
-      - name: Deploy to Railway
+      - name: Trigger Railway Deploy via API
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
-          set -x
-          echo "Logging in to Railway..."
-          railway login --token "$RAILWAY_TOKEN"
-          echo "Login successful"
+          echo "Triggering deployment via Railway GraphQL API..."
           
-          echo "Linking to project..."
-          railway link --project 3976f97a-f083-46f3-afdc-351ba0f03eda --service d513f82f-3c3b-4ecc-b57e-237a58b38d2b
-          echo "Link successful"
+          RESPONSE=$(curl -s -X POST \
+            https://backboard.railway.app/graphql/v2 \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -d '{
+              "query": "mutation DeploymentTrigger { deploymentTrigger(input: { projectId: \"3976f97a-f083-46f3-afdc-351ba0f03eda\", serviceId: \"d513f82f-3c3b-4ecc-b57e-237a58b38d2b\" }) { id } }"
+            }')
           
-          echo "Starting deployment..."
-          railway up
-          echo "Deployment complete"
+          echo "Response: $RESPONSE"
+          
+          if echo "$RESPONSE" | grep -q '"id"'; then
+            echo "✅ Deployment triggered successfully!"
+          else
+            echo "❌ Failed to trigger deployment"
+            echo "$RESPONSE"
+            exit 1
+          fi
