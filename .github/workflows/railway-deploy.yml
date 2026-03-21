@@ -1,0 +1,24 @@
+name: Railway Auto Deploy
+
+on:
+  push:
+    branches: [canary]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Deploy to Railway
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway login --token "$RAILWAY_TOKEN"
+          railway link --project 3976f97a-f083-46f3-afdc-351ba0f03eda --service d513f82f-3c3b-4ecc-b57e-237a58b38d2b --environment 41466349-8ead-4a4a-b2f7-548f2c4cdb6f
+          railway up
