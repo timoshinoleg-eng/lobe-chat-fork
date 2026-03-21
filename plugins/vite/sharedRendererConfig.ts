@@ -161,6 +161,7 @@ export const sharedOptimizeDeps = {
     'react-dom',
     'react-dom/client',
     'react-router-dom',
+    '@tanstack/react-query',
     'antd',
     '@ant-design/icons',
     '@lobehub/ui',
