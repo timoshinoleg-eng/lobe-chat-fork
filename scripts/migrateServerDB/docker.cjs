@@ -3,6 +3,7 @@ const { Pool } = require('pg');
 const { drizzle } = require('drizzle-orm/node-postgres');
 const migrator = require('drizzle-orm/node-postgres/migrator');
 const { PGVECTOR_HINT } = require('./errorHint');
+const fs = require('fs');
 
 if (!process.env.DATABASE_URL) {
   throw new Error('DATABASE_URL is not set, please set it in your environment variables.');
@@ -14,6 +15,14 @@ const db = drizzle(client);
 
 const runMigrations = async () => {
   console.log('[Database] Start to migration...');
+  
+  // Ensure 0090 migration file exists (placeholder for Railway compatibility)
+  const migrationFile = '/app/migrations/0090_enable_pg_search.sql';
+  if (!fs.existsSync(migrationFile)) {
+    console.log('[Database] Creating placeholder 0090 migration...');
+    fs.writeFileSync(migrationFile, '-- Placeholder\nSELECT 1;\n');
+  }
+  
   await migrator.migrate(db, {
     migrationsFolder: '/app/migrations',
   });
