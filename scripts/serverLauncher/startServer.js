@@ -182,7 +182,7 @@ const runServer = async () => {
   console.log('🌐 DNS Server:', dns.getServers());
   console.log('-------------------------------------');
 
-  if (process.env.DATABASE_DRIVER) {
+  if (process.env.DATABASE_DRIVER && process.env.SKIP_DB_MIGRATION !== '1') {
     try {
       await fs.access(DB_MIGRATION_SCRIPT_PATH);
 
