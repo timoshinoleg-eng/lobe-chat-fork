@@ -1,7 +1,7 @@
 ## Set global build ENV
 ARG NODEJS_VERSION="24"
-# Cache invalidation - force rebuild on 2026-03-22-005
-ARG CACHE_BUST="be0ce04705"
+# Cache invalidation - force rebuild on 2026-03-22-006
+ARG CACHE_BUST="83eae99a13"
 
 ## Base image for all building stages
 FROM node:${NODEJS_VERSION}-slim AS base
