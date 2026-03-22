@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 export const getAnalyticsConfig = () => {
   return createEnv({
+    skipValidation: process.env.SKIP_ENV_VALIDATION === '1',
     server: {
       ENABLED_PLAUSIBLE_ANALYTICS: z.boolean(),
       PLAUSIBLE_SCRIPT_BASE_URL: z.string(),

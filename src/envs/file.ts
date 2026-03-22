@@ -14,6 +14,7 @@ export const getFileConfig = () => {
 
   return createEnv({
     clientPrefix: 'NEXT_PUBLIC_',
+    skipValidation: process.env.SKIP_ENV_VALIDATION === '1',
     client: {
       /**
        * @deprecated

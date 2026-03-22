@@ -2,6 +2,7 @@ import { createEnv } from '@t3-oss/env-core';
 import { z } from 'zod';
 
 export const knowledgeEnv = createEnv({
+  skipValidation: process.env.SKIP_ENV_VALIDATION === '1',
   runtimeEnv: {
     DEFAULT_FILES_CONFIG: process.env.DEFAULT_FILES_CONFIG,
     FILE_TYPE_CHUNKING_RULES: process.env.FILE_TYPE_CHUNKING_RULES,

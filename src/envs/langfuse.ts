@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 export const getLangfuseConfig = () => {
   return createEnv({
+    skipValidation: process.env.SKIP_ENV_VALIDATION === '1',
     runtimeEnv: {
       ENABLE_LANGFUSE: process.env.ENABLE_LANGFUSE === '1',
       LANGFUSE_SECRET_KEY: process.env.LANGFUSE_SECRET_KEY || '',

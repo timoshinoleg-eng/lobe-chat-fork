@@ -20,6 +20,7 @@ declare global {
 
 export const getEmailConfig = () => {
   return createEnv({
+    skipValidation: process.env.SKIP_ENV_VALIDATION === '1',
     server: {
       EMAIL_SERVICE_PROVIDER: z.enum(['nodemailer', 'resend']).optional(),
       RESEND_API_KEY: z.string().optional(),

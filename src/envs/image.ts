@@ -5,6 +5,7 @@ import { MAX_DEFAULT_IMAGE_NUM, MIN_DEFAULT_IMAGE_NUM } from '@/const/settings';
 
 export const getImageConfig = () => {
   return createEnv({
+    skipValidation: process.env.SKIP_ENV_VALIDATION === '1',
     runtimeEnv: {
       AI_IMAGE_DEFAULT_IMAGE_NUM: process.env.AI_IMAGE_DEFAULT_IMAGE_NUM,
     },

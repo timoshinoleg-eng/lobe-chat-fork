@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 export const getServerDBConfig = () => {
   return createEnv({
+    skipValidation: process.env.SKIP_ENV_VALIDATION === '1',
     runtimeEnv: {
       DATABASE_DRIVER: process.env.DATABASE_DRIVER || 'neon',
       DATABASE_TEST_URL: process.env.DATABASE_TEST_URL,

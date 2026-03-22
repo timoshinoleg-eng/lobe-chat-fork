@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 export const getLLMConfig = () => {
   return createEnv({
+    skipValidation: process.env.SKIP_ENV_VALIDATION === '1',
     server: {
       API_KEY_SELECT_MODE: z.string().optional(),
 

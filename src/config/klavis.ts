@@ -15,6 +15,7 @@ import { z } from 'zod';
  */
 export const getKlavisConfig = () => {
   return createEnv({
+    skipValidation: process.env.SKIP_ENV_VALIDATION === '1',
     client: {},
     runtimeEnv: {
       // Server-side API key (never exposed to client)

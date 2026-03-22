@@ -107,6 +107,7 @@ declare global {
 export const getAuthConfig = () => {
   return createEnv({
     clientPrefix: 'NEXT_PUBLIC_',
+    skipValidation: process.env.SKIP_ENV_VALIDATION === '1',
     client: {},
     server: {
       AUTH_SECRET: z.string().optional(),

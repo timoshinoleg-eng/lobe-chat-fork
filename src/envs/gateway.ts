@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 export const getGatewayConfig = () => {
   return createEnv({
+    skipValidation: process.env.SKIP_ENV_VALIDATION === '1',
     runtimeEnv: {
       DEVICE_GATEWAY_SERVICE_TOKEN: process.env.DEVICE_GATEWAY_SERVICE_TOKEN,
       DEVICE_GATEWAY_URL: process.env.DEVICE_GATEWAY_URL,

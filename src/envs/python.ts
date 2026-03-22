@@ -4,6 +4,7 @@ import { z } from 'zod';
 export const getPythonConfig = () => {
   return createEnv({
     clientPrefix: 'NEXT_PUBLIC_',
+    skipValidation: process.env.SKIP_ENV_VALIDATION === '1',
     client: {
       NEXT_PUBLIC_PYODIDE_INDEX_URL: z.string().url().optional(),
       NEXT_PUBLIC_PYODIDE_PIP_INDEX_URL: z.string().url().optional(),

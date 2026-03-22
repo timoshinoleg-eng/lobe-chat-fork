@@ -11,6 +11,7 @@ import { parseFeatureFlag } from './utils/parser';
 const log = debug('lobe-feature-flags');
 
 const env = createEnv({
+  skipValidation: process.env.SKIP_ENV_VALIDATION === '1',
   runtimeEnv: {
     FEATURE_FLAGS: process.env.FEATURE_FLAGS,
   },

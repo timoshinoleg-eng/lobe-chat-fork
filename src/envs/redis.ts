@@ -20,6 +20,7 @@ const parseRedisTls = (value?: string) => {
 
 export const getRedisEnv = () => {
   return createEnv({
+    skipValidation: process.env.SKIP_ENV_VALIDATION === '1',
     runtimeEnv: {
       REDIS_DATABASE: parseNumber(process.env.REDIS_DATABASE),
       REDIS_PASSWORD: process.env.REDIS_PASSWORD,

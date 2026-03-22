@@ -9,6 +9,7 @@ const optionalNumberEnv = (min: number, max: number) =>
 
 export const getToolsConfig = () => {
   return createEnv({
+    skipValidation: process.env.SKIP_ENV_VALIDATION === '1',
     runtimeEnv: {
       CRAWL_CONCURRENCY: process.env.CRAWL_CONCURRENCY,
       CRAWLER_RETRY: process.env.CRAWLER_RETRY,

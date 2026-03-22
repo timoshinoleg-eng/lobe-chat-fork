@@ -36,6 +36,7 @@ const PLUGINS_INDEX_URL = 'https://registry.npmmirror.com/@lobehub/plugins-index
 export const getAppConfig = () => {
   return createEnv({
     clientPrefix: 'NEXT_PUBLIC_',
+    skipValidation: process.env.SKIP_ENV_VALIDATION === '1',
     client: {
       NEXT_PUBLIC_ENABLE_SENTRY: z.boolean(),
     },
