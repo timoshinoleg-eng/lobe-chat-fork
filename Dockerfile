@@ -1,7 +1,7 @@
 ## Set global build ENV
 ARG NODEJS_VERSION="24"
-# Cache invalidation - force rebuild on 2026-03-22-004
-ARG CACHE_BUST="5580fb0848"
+# Cache invalidation - force rebuild on 2026-03-22-005
+ARG CACHE_BUST="be0ce04705"
 
 ## Base image for all building stages
 FROM node:${NODEJS_VERSION}-slim AS base
@@ -114,9 +114,10 @@ COPY --from=builder /app/.next/standalone /app/
 COPY --from=builder /app/.next/static /app/.next/static
 # Copy SPA assets (Vite build output)
 COPY --from=builder /app/public/spa /app/public/spa
-# Copy database migrations (cache-bust: 2026-03-22-004)
+# Copy database migrations (cache-bust: 2026-03-22-005)
+RUN rm -rf /app/migrations 2>/dev/null || true
 COPY --from=builder /app/packages/database/migrations /app/migrations
-RUN ls -la /app/migrations/ | grep 009
+RUN ls -la /app/migrations/ | tail -5
 COPY --from=builder /app/scripts/migrateServerDB/docker.cjs /app/docker.cjs
 COPY --from=builder /app/scripts/migrateServerDB/errorHint.js /app/errorHint.js
 
